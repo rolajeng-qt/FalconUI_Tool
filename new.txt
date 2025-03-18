@@ -1,0 +1,15 @@
+--double-click-image "C:\Users\ccc\Pictures\ppp.png"
+--sleep 3
+--right-click
+--position
+--sleep 2
+--click
+--sleep 2
+--double-click
+--sleep 3
+--click
+
+
+
+
+

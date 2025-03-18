@@ -1,0 +1,25 @@
+--sleep 1
+--press win+r
+--sleep 1
+--type cmd
+--sleep 0.5
+--press ctrl+shift+enter
+--sleep 5
+--type "tzutil /s \"Taipei Standard Time\""
+--press enter
+--sleep 1
+#--type "sc start w32time"
+--type "net stop W32Time"
+--press enter
+--sleep 2
+--type "net start W32Time"
+--press enter
+--sleep 8
+--type "w32tm /resync"
+--press enter
+
+
+
+
+
+
