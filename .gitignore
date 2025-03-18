@@ -1,3 +1,9 @@
+
+build/
+dist/
+V101/
+*.spec
+*.txt
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -171,4 +177,8 @@ cython_debug/
 .ruff_cache/
 
 # PyPI configuration file
+<<<<<<< HEAD
 .pypirc
+=======
+.pypirc
+>>>>>>> 5545bb3 (Initial commit)
