@@ -989,7 +989,7 @@ class AutoGUIController:
                 x, y = pyautogui.position()
                 position_str = f"({x}, {y})"
                 try:
-                    import pyperclip
+                    
                     pyperclip.copy(position_str)
                     clipboard_msg = f"Current position {position_str} copied to clipboard"
                     print(clipboard_msg)
