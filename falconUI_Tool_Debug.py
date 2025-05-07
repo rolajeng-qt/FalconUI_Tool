@@ -5,17 +5,11 @@ import os
 import queue
 import subprocess
 import sys
-from pathlib import Path
 import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-# 確保控制台輸出使用 UTF-8
-if sys.platform == 'win32':
-    import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
 class FalconUIScriptBuilder:
     def __init__(self, root):
@@ -168,14 +162,14 @@ class FalconUIScriptBuilder:
         self.is_script_modified = False
         self.update_title()
 
-        # # Initialize debug state variables
-        # self.debug_mode = False
-        # self.current_debug_line = 0
-        # self.debug_lines = []
-        # self.debug_line_numbers = []
-        # self.debug_step_event = threading.Event()
-        # self.debug_skip_event = threading.Event()
-        # self.debug_stop_event = threading.Event()
+        # Initialize debug state variables
+        self.debug_mode = False
+        self.current_debug_line = 0
+        self.debug_lines = []
+        self.debug_line_numbers = []
+        self.debug_step_event = threading.Event()
+        self.debug_skip_event = threading.Event()
+        self.debug_stop_event = threading.Event()
 
         # Start autosave timer
         self.schedule_autosave()
@@ -895,58 +889,58 @@ class FalconUIScriptBuilder:
         )
         clear_btn.pack(side=tk.LEFT, padx=3)
 
-        # # Add debug tools frame
-        # debug_frame = ttk.Frame(self.editor_frame)
-        # debug_frame.pack(fill=tk.X, pady=5)
+        # Add debug tools frame
+        debug_frame = ttk.Frame(self.editor_frame)
+        debug_frame.pack(fill=tk.X, pady=5)
 
-        # debug_label = ttk.Label(
-        #     debug_frame, text="Debug Tools:", font=("Segoe UI", 9, "bold")
-        # )
-        # debug_label.pack(side=tk.LEFT, padx=5)
+        debug_label = ttk.Label(
+            debug_frame, text="Debug Tools:", font=("Segoe UI", 9, "bold")
+        )
+        debug_label.pack(side=tk.LEFT, padx=5)
 
-        # # Step-by-step execution button
-        # self.step_btn = ttk.Button(
-        #     debug_frame,
-        #     text="Step Mode",
-        #     command=self.run_step_by_step,
-        #     style="Secondary.TButton",
-        # )
-        # self.step_btn.pack(side=tk.LEFT, padx=3)
+        # Step-by-step execution button
+        self.step_btn = ttk.Button(
+            debug_frame,
+            text="Step Mode",
+            command=self.run_step_by_step,
+            style="Secondary.TButton",
+        )
+        self.step_btn.pack(side=tk.LEFT, padx=3)
 
-        # # Next step button (initially disabled)
-        # self.next_step_btn = ttk.Button(
-        #     debug_frame,
-        #     text="Next Step",
-        #     command=self.execute_next_step,
-        #     state=tk.DISABLED,
-        # )
-        # self.next_step_btn.pack(side=tk.LEFT, padx=3)
+        # Next step button (initially disabled)
+        self.next_step_btn = ttk.Button(
+            debug_frame,
+            text="Next Step",
+            command=self.execute_next_step,
+            state=tk.DISABLED,
+        )
+        self.next_step_btn.pack(side=tk.LEFT, padx=3)
 
-        # # Skip step button
-        # self.skip_step_btn = ttk.Button(
-        #     debug_frame,
-        #     text="Skip Step",
-        #     command=self.skip_current_step,
-        #     state=tk.DISABLED,
-        # )
-        # self.skip_step_btn.pack(side=tk.LEFT, padx=3)
+        # Skip step button
+        self.skip_step_btn = ttk.Button(
+            debug_frame,
+            text="Skip Step",
+            command=self.skip_current_step,
+            state=tk.DISABLED,
+        )
+        self.skip_step_btn.pack(side=tk.LEFT, padx=3)
 
-        # # Stop debug button
-        # self.stop_debug_btn = ttk.Button(
-        #     debug_frame,
-        #     text="Stop Debug",
-        #     command=self.stop_debug,
-        #     state=tk.DISABLED,
-        #     style="Danger.TButton",
-        # )
-        # self.stop_debug_btn.pack(side=tk.LEFT, padx=3)
+        # Stop debug button
+        self.stop_debug_btn = ttk.Button(
+            debug_frame,
+            text="Stop Debug",
+            command=self.stop_debug,
+            state=tk.DISABLED,
+            style="Danger.TButton",
+        )
+        self.stop_debug_btn.pack(side=tk.LEFT, padx=3)
 
-        # # Line indicator in debug mode
-        # self.current_line_var = tk.StringVar(value="")
-        # current_line_label = ttk.Label(
-        #     debug_frame, textvariable=self.current_line_var, font=("Consolas", 9)
-        # )
-        # current_line_label.pack(side=tk.RIGHT, padx=5)
+        # Line indicator in debug mode
+        self.current_line_var = tk.StringVar(value="")
+        current_line_label = ttk.Label(
+            debug_frame, textvariable=self.current_line_var, font=("Consolas", 9)
+        )
+        current_line_label.pack(side=tk.RIGHT, padx=5)
 
         # Create a PanedWindow to divide the editor area vertically
         editor_paned = ttk.PanedWindow(self.editor_frame, orient=tk.VERTICAL)
@@ -1013,18 +1007,17 @@ class FalconUIScriptBuilder:
         self.log_text.bind(
             "<Button-3>", self.show_log_context_menu
         )  # Add right-click menu
-        # Configure text colors for the log - enhance these for better contrast
-        # Simplified log text tag configuration
-        # Log 顏色配置（無粗體／無斜體，保留對比與清晰度）
-        self.log_text.tag_configure("header", foreground="#FFD700")                         # 金黃
-        self.log_text.tag_configure("error", foreground="#FF4C4C", background="#330000")    # 紅底
-        self.log_text.tag_configure("warning", foreground="#FFA500", background="#2F1B00")  # 橘底
-        self.log_text.tag_configure("info", foreground="#CCCCCC")                           # 淡灰
-        self.log_text.tag_configure("success", foreground="#00DD99")                        # 青綠
-        self.log_text.tag_configure("command", foreground="#FFFFFF", background="#444488")  # 白字藍底
-        self.log_text.tag_configure("action", foreground="#00BFFF")                         # 藍
-        self.log_text.tag_configure("result", foreground="#87CEFA")                         # 淺藍
-        self.log_text.tag_configure("wait", foreground="#FFFF66")                           # 黃
+        # Configure text colors for the log
+        self.log_text.tag_configure("header", foreground="#FFFF00")
+        self.log_text.tag_configure("error", foreground="#FF0000")
+        self.log_text.tag_configure(
+            "warning", foreground="#FFA500"
+        )  # Orange for warnings
+        self.log_text.tag_configure("info", foreground="#00FF00")
+        self.log_text.tag_configure("success", foreground="#00FFFF")
+        self.log_text.tag_configure(
+            "command", foreground="#FFFFFF", background="#333366"
+        )  # Highlight commands
 
         # Log control frame
         log_controls = ttk.Frame(log_container)
@@ -1355,9 +1348,9 @@ class FalconUIScriptBuilder:
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="Validate Script", command=self.validate_script)
-        # tools_menu.add_command(
-        #     label="Step-by-Step Debug", command=self.run_step_by_step
-        # )
+        tools_menu.add_command(
+            label="Step-by-Step Debug", command=self.run_step_by_step
+        )
         tools_menu.add_checkbutton(
             label="Stop on Error",
             variable=self.stop_on_error_var,
@@ -1717,11 +1710,7 @@ class FalconUIScriptBuilder:
         self.schedule_autosave()
 
     def add_to_log(self, message, tag=None):
-        """Add text to the log with tag applied to the specific line only"""
-        # Split the message into lines to apply tag to each line separately
-        if not message:
-            return
-            
+        """Add text to the log with optional tag for color"""
         self.log_queue.put((message, tag))
 
     def check_log_queue(self):
@@ -1731,18 +1720,10 @@ class FalconUIScriptBuilder:
                 message, tag = self.log_queue.get_nowait()
                 # Temporarily enable text widget for modification
                 self.log_text.config(state=tk.NORMAL)
-                
-                # Get the current end position before inserting
-                start_index = self.log_text.index(tk.END)
-                
-                # Insert the message
                 self.log_text.insert(tk.END, message)
-                
-                # Apply tag only to the newly inserted text
                 if tag:
-                    end_index = self.log_text.index(tk.END)
-                    self.log_text.tag_add(tag, start_index, end_index)
-                    
+                    last_line_start = self.log_text.index(f"end-{len(message) + 1}c")
+                    self.log_text.tag_add(tag, last_line_start, tk.END)
                 self.log_text.see(tk.END)
                 # Return to disabled state to prevent user edits
                 self.log_text.config(state=tk.DISABLED)
@@ -1776,10 +1757,6 @@ class FalconUIScriptBuilder:
         )
         output_buffer.write("\n=== Execution Output ===\n\n")
 
-        # Current command tracking
-        current_command = None
-        command_output = []
-
         while True:
             # Check if process has ended
             if process.poll() is not None:
@@ -1791,65 +1768,44 @@ class FalconUIScriptBuilder:
                 # Write to log buffer
                 output_buffer.write(output)
 
-                # Group command outputs together
-                if output.startswith("[command]"):
-                    # If we were tracking a previous command, output its group now
-                    if current_command and command_output:
-                        self.add_command_group(current_command, command_output)
-                        command_output = []
-                    
-                    # Start tracking new command
-                    current_command = output.strip()
-                    command_output = []
+                # Display in UI with appropriate color tags
+                if "[Error]" in output or "Failed:" in output or "Exception:" in output:
+                    error_count += 1
+                    error_lines.append(output.strip())
+                    self.add_to_log(output, "error")
+                elif "[Warning]" in output:
+                    self.add_to_log(output, "warning")
+                elif "[command]" in output:
+                    self.add_to_log(output, "command")
                 else:
-                    # Add to current command's output
-                    if current_command:
-                        command_output.append((output.strip(), self._determine_output_type(output)))
-                    else:
-                        # Regular line-by-line handling for non-grouped output
-                        if "[Error]" in output or "Failed:" in output or "Exception:" in output:
-                            error_count += 1
-                            error_lines.append(output.strip())
-                            timestamp = time.strftime("%H:%M:%S")
-                            self.add_to_log(f"[{timestamp}] {output}", "error")
-                        else:
-                            tag = self._determine_output_type(output)
-                            timestamp = time.strftime("%H:%M:%S")
-                            self.add_to_log(f"[{timestamp}] {output}", tag)
+                    self.add_to_log(output, "info")
             else:
                 # No output available, give control back to GUI
                 time.sleep(0.1)
 
-        # Process remaining output and flush last command group
+        # Process has ended, get any remaining output
         remaining_output, stderr = process.communicate()
         if remaining_output:
-            # Process the remaining output
-            lines = remaining_output.splitlines()
-            for line in lines:
+            # Write to log buffer
+            output_buffer.write(remaining_output)
+
+            # Process remaining output line by line for UI display
+            for line in remaining_output.splitlines():
                 line_str = line + "\n" if not line.endswith("\n") else line
-                output_buffer.write(line_str)
-                
-                if line_str.startswith("[command]"):
-                    # If we were tracking a previous command, output its group now
-                    if current_command and command_output:
-                        self.add_command_group(current_command, command_output)
-                        command_output = []
-                    
-                    # Start tracking new command
-                    current_command = line_str.strip()
-                    command_output = []
+                if (
+                    "[Error]" in line_str
+                    or "Failed:" in line_str
+                    or "Exception:" in line_str
+                ):
+                    error_count += 1
+                    error_lines.append(line_str.strip())
+                    self.add_to_log(line_str, "error")
+                elif "[Warning]" in line_str:
+                    self.add_to_log(line_str, "warning")
+                elif "[command]" in line_str:
+                    self.add_to_log(line_str, "command")
                 else:
-                    # Add to current command's output
-                    if current_command:
-                        command_output.append((line_str.strip(), self._determine_output_type(line_str)))
-                    else:
-                        # Regular handling
-                        tag = self._determine_output_type(line_str)
-                        self.add_to_log(line_str, tag)
-        
-        # Flush any remaining command group
-        if current_command and command_output:
-            self.add_command_group(current_command, command_output)
+                    self.add_to_log(line_str, "info")
 
         # Process stderr if any
         if stderr:
@@ -1886,8 +1842,8 @@ class FalconUIScriptBuilder:
         try:
             # Create Falcon_Log directory if it doesn't exist
             today = time.strftime("%Y-%m-%d")
-            log_dir = Path(f"C:/Falcon_Log/{today}")
-            log_dir.mkdir(parents=True, exist_ok=True)
+            log_dir = os.path.join("C:/", "Falcon_Log", today)
+            os.makedirs(log_dir, exist_ok=True)
 
             # log_dir = os.path.join("C:/", "Falcon_Log")
             # os.makedirs(log_dir, exist_ok=True)
@@ -1901,8 +1857,7 @@ class FalconUIScriptBuilder:
 
             # Create log file path
             log_filename = f"falconUI_{script_name}_{timestamp}.log"
-            # log_path = os.path.join(log_dir, log_filename)
-            log_path = log_dir / log_filename
+            log_path = os.path.join(log_dir, log_filename)
 
             # Write log to file
             with open(log_path, "w", encoding="utf-8") as log_file:
@@ -1947,46 +1902,6 @@ class FalconUIScriptBuilder:
         self.stop_btn.config(state=tk.DISABLED)
         self.root.deiconify()
 
-    def _determine_output_type(self, line):
-        """Determine the type of log output for appropriate styling"""
-        line_str = line.strip()
-        if "[command]" in line_str:
-            return "command"
-        elif "[Error]" in line_str or "Failed:" in line_str or "Exception:" in line_str:
-            return "error"
-        elif "[Warning]" in line_str:
-            return "warning"
-        elif "[V]" in line_str or "successfully" in line_str.lower():
-            return "success"
-        elif "Attempting to" in line_str or "Checking" in line_str:
-            return "action"
-        elif "Found" in line_str or "installed" in line_str:
-            return "result"
-        elif "Waiting" in line_str:
-            return "wait"
-        else:
-            return "info"
-
-    def add_command_group(self, command, outputs):
-        """Add a visually separated command group to the log with timestamp"""
-        # Get current timestamp
-        timestamp = time.strftime("%H:%M:%S")
-        
-        # Add separator
-        self.add_to_log("\n" + "=" * 50 + "\n", "info")
-        
-        # Add command with prominent styling and timestamp
-        self.add_to_log(f"[{timestamp}] {command}\n", "command")
-        
-        # Add separator between command and outputs
-        self.add_to_log("-" * 50 + "\n", "info")
-        
-        # Add each output with appropriate tag
-        for output, tag in outputs:
-            self.add_to_log(f"  {output}\n", tag)
-        
-        # Add bottom separator
-        self.add_to_log("\n", "info")
 
     def run_script(self):
         # Disable the run button and enable stop button during execution
@@ -2373,8 +2288,7 @@ class FalconUIScriptBuilder:
 
                 # Create log file path (add debug indicator)
                 log_filename = f"{script_name}_debug_{timestamp}.log"
-                #log_path = os.path.join(log_dir, log_filename)
-                log_path = log_dir / log_filename
+                log_path = os.path.join(log_dir, log_filename)
 
                 # Write log to file
                 with open(log_path, "w", encoding="utf-8") as log_file:
