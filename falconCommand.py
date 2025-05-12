@@ -19,7 +19,7 @@ if sys.platform == 'win32':
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
-COMMAND_VERSION = "1.0.3"  # Add version number here
+COMMAND_VERSION = "1.0.34"  # Add version number here
 
 
 class AutoGUIController:
@@ -210,7 +210,10 @@ class AutoGUIController:
             help="Execute commands from a text file",
         )
         parser.add_argument(
-            "--launch", type=str, metavar="EXE_PATH", help="Launch a Application"
+            "--launch", 
+            nargs="+",  # 改用 nargs="+" 來接收多個參數
+            metavar="EXE_PATH", 
+            help="Launch a Application"
         )
         parser.add_argument(
             "--check-software",
@@ -295,53 +298,92 @@ class AutoGUIController:
             print(f"Error saving log: {str(e)}")
             return None
 
-    def check_software(self, software_name):
+    def detect_display_scale_factor(self):
+        """
+        Detect the Windows display scaling factor (DPI scaling)
+        
+        :return: The detected scaling factor (e.g., 1.0, 1.25, 1.5, 2.0)
+        """
+        try:
+            if sys.platform == 'win32':
+                # On Windows, use the GetDeviceCaps function to detect scaling
+                import ctypes
+                user32 = ctypes.windll.user32
+                
+                # Get DC (device context) of the entire screen
+                hdc = user32.GetDC(0)
+                
+                # The actual logical DPI
+                logical_width = ctypes.windll.gdi32.GetDeviceCaps(hdc, 118)   # DESKTOPHORZRES
+                logical_height = ctypes.windll.gdi32.GetDeviceCaps(hdc, 117)  # DESKTOPVERTRES
+                
+                # Physical width and height
+                physical_width = ctypes.windll.gdi32.GetDeviceCaps(hdc, 8)    # HORZRES
+                physical_height = ctypes.windll.gdi32.GetDeviceCaps(hdc, 10)  # VERTRES
+                
+                # Release the device context
+                user32.ReleaseDC(0, hdc)
+                
+                # Calculate scale factor
+                scale_x = logical_width / physical_width if physical_width > 0 else 1.0
+                scale_y = logical_height / physical_height if physical_height > 0 else 1.0
+                
+                # Use the average if they're different
+                scale_factor = (scale_x + scale_y) / 2
+                
+                # Round to nearest common scale
+                common_scales = [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0]
+                closest_scale = min(common_scales, key=lambda x: abs(x - scale_factor))
+                
+                return closest_scale
+            else:
+                # For non-Windows platforms, return 1.0 as default
+                return 1.0
+        except Exception as e:
+            print(f"Error detecting scale factor: {str(e)}")
+            return 1.0
+
+    def check_software(self, software_name, fuzzy=True):
         """
         Check if specified software is installed on the computer
-        
+
         :param software_name: Name of the software to check (case-insensitive)
+        :param fuzzy: Whether to allow partial name match (default: True)
         :return: True if installed, False otherwise
         """
         try:
             import winreg
             import os
-            
-            software_found = False
-            search_paths = [
-                # Check uninstall registry keys (common installation location)
-                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
-                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-                # Check Program Files directories
-                None,  # Special case for Program Files check
-            ]
-            
-            # Normalize search name
+
             software_name_lower = software_name.lower()
-            
+
+            def match(a, b):
+                return b in a if fuzzy else a == b
+
+            search_paths = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"),
+                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall"),
+                None,  # special case: check Program Files folders
+            ]
+
             for reg_path in search_paths:
                 if reg_path is None:
-                    # Check Program Files directories
-                    program_files = [
+                    program_dirs = [
                         os.environ.get('ProgramFiles', 'C:\\Program Files'),
                         os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)')
                     ]
-                    
-                    for program_dir in program_files:
-                        if not os.path.exists(program_dir):
+                    for base in program_dirs:
+                        if not os.path.exists(base):
                             continue
-                            
-                        for item in os.listdir(program_dir):
-                            item_path = os.path.join(program_dir, item)
-                            if os.path.isdir(item_path) and software_name_lower in item.lower():
+                        for name in os.listdir(base):
+                            if match(name.lower(), software_name_lower):
                                 return True
                     continue
-                    
-                # Registry search
+
                 hkey, subkey = reg_path
                 try:
                     with winreg.OpenKey(hkey, subkey) as key:
-                        # Enumerate subkeys
                         i = 0
                         while True:
                             try:
@@ -349,92 +391,88 @@ class AutoGUIController:
                                 with winreg.OpenKey(key, subkey_name) as subkey_handle:
                                     try:
                                         display_name = winreg.QueryValueEx(subkey_handle, "DisplayName")[0]
-                                        if software_name_lower in display_name.lower():
+                                        if match(display_name.lower(), software_name_lower):
                                             return True
                                     except (WindowsError, FileNotFoundError):
-                                        pass  # No DisplayName value
+                                        pass
                                 i += 1
                             except WindowsError:
-                                break  # No more subkeys
+                                break
                 except (WindowsError, FileNotFoundError):
-                    pass  # Registry key not found
-                    
-            # Extra check for common executable patterns
+                    continue
+
+            # extra check for executables in PATH
             extensions = ['.exe', '.msi', '.app']
             for path in os.environ.get('PATH', '').split(os.pathsep):
-                if path and os.path.exists(path):
+                if os.path.exists(path):
                     for filename in os.listdir(path):
                         name, ext = os.path.splitext(filename.lower())
-                        if ext in extensions and software_name_lower in name:
+                        if ext in extensions and match(name, software_name_lower):
                             return True
-            
+
             return False
         except Exception as e:
             print(f"Error checking for software: {str(e)}")
             return False
 
-    def wait_until_exist(self, target_path, timeout=30, interval=1, confidence=0.8):
+
+    def wait_until_exist(self, target_path, timeout=30, interval=1, confidence=0.9):
         """
-        Wait until a target file, folder, or image exists
-        
-        This function checks for:
-        1. Files or folders on disk (any file type: .txt, .pdf, .html, etc.)
-        2. Images that appear on screen (.png, .jpg, .jpeg, .bmp, .gif)
-        
-        :param target_path: Path to the file, folder, or image
-        :param timeout: Maximum waiting time in seconds
-        :param interval: Interval between checks in seconds
-        :param confidence: Image match confidence (0-1) - only for image detection on screen
-        :return: True if found, False if timed out
+        Wait until file/folder exists, or image appears on screen
         """
-        # Define recognized image extensions for screen detection
-        image_exts = {".png", ".jpg", ".jpeg", ".bmp", ".gif"}
+        image_exts = {"png", "jpg", "jpeg", "bmp", "gif"}
         target_path = target_path.strip('"\'')
+        target_ext = target_path.split(".")[-1]
+        print(f"target_path={target_path}")
         start = time.time()
         target = Path(target_path)
-        target_ext = target.suffix.lower()
+        print(f"target={target}")
         
-        # Print info about what we're checking for
-        if target_ext in image_exts:
-            print(f"Waiting for file or image: {target_path}")
-            print(f"Will check both file system AND screen detection")
-        else:
-            print(f"Waiting for file: {target_path}")
-        
-        # Start waiting loop
+        #target_ext = target.suffix.lower()
+        print(f"target_ext={target_ext}")
+
+        is_image = target_ext in image_exts
+
+        print(f"Waiting for {'image' if is_image else 'file'}: {target_path}")
+        if is_image:
+            print(f"→ Checking screen for image match (confidence={confidence})")
+
         while time.time() - start < timeout:
-            # Check if the file exists on disk first (for ALL file types)
-            if target.exists():
-                print(f"File found: {target_path}")
-                return True
-                
-            # For image files, also try to find them on screen
-            if target_ext in image_exts:
+            if is_image:
                 try:
-                    result = self.locate_image_multi_scale(
-                        str(target), confidence=confidence
-                    )
+                    result = self.locate_image_multi_scale_auto(str(target), confidence=confidence)
+                    print(f"result = {result}")
                     if result:
-                        print(f"Image detected on screen: {target_path}")
+                        print(f"[V] Image detected on screen: {target_path}")
                         return True
                 except Exception as e:
-                    print(f"[Image Detection Warning] {e}")
-                    
-            # Wait before next check
+                    print(f"[!] Image detection error: {e}")
+            else:
+                if target.exists():
+                    print(f"[V] File found: {target_path}")
+                    return True
+
             time.sleep(interval)
-            
-            # Show progress indication
+
             elapsed = time.time() - start
             remaining = timeout - elapsed
-            if int(elapsed) % 5 == 0 and elapsed > 0:  # Show progress every 5 seconds
+            if int(elapsed) % 5 == 0 and elapsed > 0:
                 print(f"Still waiting... {int(remaining)}s remaining")
-        
-        # If we get here, we timed out
-        print(f"[X] Timeout: File not found: {target_path}")
-        
+
+        print(f"[X] Timeout: {target_path} not found")
         return False
 
-    def wait_until_process(self, process_name, timeout=30, interval=1):
+
+    def wait_until_process(self, process_name, timeout=30, interval=1, exact_match=True):
+        """
+        Wait until a specific process appears.
+
+        :param process_name: Name of the process to wait for (e.g., 'notepad.exe')
+        :param timeout: Maximum wait time in seconds
+        :param interval: Time to wait between checks
+        :param exact_match: Whether to use exact match or substring match
+        :return: True if process is found, False if timeout
+        """
         try:
             import psutil
         except ImportError:
@@ -443,12 +481,31 @@ class AutoGUIController:
 
         print(f"Waiting for process '{process_name}' to appear (timeout: {timeout}s)...")
         start = time.time()
+        found = False
 
         while time.time() - start < timeout:
-            for proc in psutil.process_iter(attrs=["name"]):
-                if proc.info["name"].lower() == process_name.lower():
-                    print(f"[V] Process '{process_name}' is now running!")
-                    return True
+            try:
+                for proc in psutil.process_iter(attrs=["name"]):
+                    pname = proc.info.get("name", "").lower()
+                    target = process_name.lower()
+
+                    if exact_match and pname == target:
+                        found = True
+                        break
+                    elif not exact_match and target in pname:
+                        found = True
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue  # Skip inaccessible or zombie processes
+
+            if found:
+                print(f"[V] Process '{process_name}' is now running!")
+                return True
+
+            elapsed = int(time.time() - start)
+            if elapsed % 5 == 0 and elapsed > 0:
+                print(f"Still waiting... {timeout - elapsed}s remaining")
+
             time.sleep(interval)
 
         print(f"[X] Timeout: Process '{process_name}' not found within {timeout}s")
@@ -460,7 +517,7 @@ class AutoGUIController:
         template_path,
         scale_range=(0.6, 1.4),
         step=0.05,
-        confidence=0.8,
+        confidence=0.9,
         grayscale=True,
     ):
         # 擷取螢幕並轉為灰階圖
@@ -534,102 +591,100 @@ class AutoGUIController:
         else:
             # print(f"[X] 找不到符合門檻 ({confidence}) 的匹配，最高為 {best_confidence:.3f}")
             return None
-
-    def locate_image(
-        self, image_path, confidence=0.8, timeout=None, show_location=False
-    ):
+    def locate_image(self, image_path, confidence=0.9, timeout=60, show_location=False):
         """
-        Position the image and click its center
+        Locate image on screen, using enhanced automatic scaling handling
         """
         try:
-            # Check if the image exists
+            # Check if image exists
             if not Path(image_path).exists():
                 raise FileNotFoundError(f"Image file not found: {image_path}")
-
+                
+            effective_timeout = 10 if timeout is None else timeout
             start_time = time.time()
-            location = None
-
-            while True:
+            
+            if effective_timeout == 0:
                 try:
-                    # Try to locate the image
-                    location = self.locate_image_multi_scale(
+                    # Immediate check, using automatic scaling method
+                    location = self.locate_image_multi_scale_auto(
                         image_path, confidence=confidence, grayscale=True
                     )
-                    # location = pyautogui.locateOnScreen(
-                    #     image_path, confidence=confidence, grayscale=True
-                    # )
-
-                    if location:
-                        break
-
-                    if timeout and (time.time() - start_time > float(timeout)):
-                        raise TimeoutError(
-                            f"Could not find image within {timeout} seconds"
-                        )
-
-                    time.sleep(0.5)
-
-                except TimeoutError:
-                    raise
+                    if not location:
+                        print(f"[Failed] Image not found (immediate check): {image_path}")
+                        return None
+                    else:
+                        center_x = location["left"] + location["width"] // 2
+                        center_y = location["top"] + location["height"] // 2
+                        return center_x, center_y
                 except Exception as e:
-                    if not timeout:
-                        raise Exception(f"Error locating image: {str(e)}")
-                    # If timeout is set, continue waiting until timeout
-                    if time.time() - start_time > float(timeout):
-                        raise TimeoutError(
-                            f"Could not find image within {timeout} seconds"
-                        )
-
-            if location:
-                # Calculate the center point
-                center_x = location["left"] + location["width"] // 2
-                center_y = location["top"] + location["height"] // 2
-                # center_x = location.left + location.width // 2
-                # center_y = location.top + location.height // 2
-
-                if show_location:
+                    print(f"[Error] Error locating image: {str(e)}")
+                    return None
+            else:            
+                while True:
                     try:
-                        from PIL import ImageDraw, ImageGrab
+                        # Use automatic scaling method
+                        location = self.locate_image_multi_scale_auto(
+                            image_path, confidence=confidence, grayscale=True
+                        )
+                        if location:
+                            center_x = location["left"] + location["width"] // 2
+                            center_y = location["top"] + location["height"] // 2
+                            
+                            if show_location:
+                                try:
+                                    from PIL import ImageDraw, ImageGrab
+                                    # Screen capture
+                                    screen = ImageGrab.grab()
+                                    draw = ImageDraw.Draw(screen)
+                                    # Draw box and center point
+                                    draw.rectangle(
+                                        [
+                                            location["left"],
+                                            location["top"],
+                                            location["left"] + location["width"],
+                                            location["top"] + location["height"],
+                                        ],
+                                        outline="red",
+                                    )
+                                    draw.line(
+                                        [center_x - 10, center_y, center_x + 10, center_y],
+                                        fill="red",
+                                    )
+                                    draw.line(
+                                        [center_x, center_y - 10, center_x, center_y + 10],
+                                        fill="red",
+                                    )
+                                    # Display image
+                                    screen.show()
+                                except ImportError:
+                                    print("[Warning] Pillow package not installed. Cannot show location.")
+                                    
+                            return center_x, center_y
 
-                        # Screen capture
-                        screen = ImageGrab.grab()
-                        draw = ImageDraw.Draw(screen)
-                        # Draw the box and center point
-                        draw.rectangle(
-                            [
-                                location["left"],
-                                location["top"],
-                                location["left"] + location["width"],
-                                location["top"] + location["height"],
-                                # location.left,
-                                # location.top,
-                                # location.left + location.width,
-                                # location.top + location.height,
-                            ],
-                            outline="red",
-                        )
-                        draw.line(
-                            [center_x - 10, center_y, center_x + 10, center_y],
-                            fill="red",
-                        )
-                        draw.line(
-                            [center_x, center_y - 10, center_x, center_y + 10],
-                            fill="red",
-                        )
-                        # Display the image
-                        screen.show()
-                    except ImportError:
-                        print(
-                            "[Warning] Pillow package not installed. Cannot show location."
-                        )
-                return center_x, center_y
+                        elapsed = time.time() - start_time
+                        if elapsed > effective_timeout:
+                            print(f"[Failed] Timeout after {elapsed:.1f}s: Image not found: {image_path}")
+                            return None
+                            
+                        if int(elapsed) % 5 == 0 and elapsed > 0:  # Show progress every 5 seconds
+                            remaining = effective_timeout - elapsed
+                            print(f"Still searching... {int(remaining)}s remaining")
+                            time.sleep(0.5)
+                            
+                        time.sleep(0.5)
 
-            return None
+                    except Exception as e:
+                        print(f"[Error] Error during image search: {str(e)}")
+                        if time.time() - start_time > effective_timeout:
+                            print(f"[Error] Search timed out after error")
+                            return None
+                        time.sleep(0.5)
+                        continue
+
         except Exception as e:
             raise Exception(f"Error processing image: {str(e)}")
-
     def locate_and_click_image(
-        self, image_path, confidence=0.8, timeout=None, show_location=False
+        self, image_path, confidence=0.9, timeout=60, show_location=False
     ):
         """
         Position the image and click its center
@@ -734,7 +789,7 @@ class AutoGUIController:
             raise e
 
     def locate_and_right_click_image(
-        self, image_path, confidence=0.8, timeout=None, show_location=False
+        self, image_path, confidence=0.9, timeout=60, show_location=False
     ):
         """
         Position the image and click its center
@@ -839,7 +894,7 @@ class AutoGUIController:
             raise e
 
     def locate_and_double_click_image(
-        self, image_path, confidence=0.8, timeout=None, show_location=False
+        self, image_path, confidence=0.9, timeout=60, show_location=False
     ):
         """
         Locate the image and double-click its center point
@@ -940,6 +995,224 @@ class AutoGUIController:
         except Exception as e:
             raise e
 
+    def locate_image_multi_scale_auto(
+        self,
+        template_path,
+        scale_range=(0.3, 3.5),  # Expanded range to support scaling from 100% to 350%
+        confidence=0.9,
+        grayscale=True,
+    ):
+        """
+        Enhanced image location function that automatically adapts to different screen scaling ratios
+        
+        :param template_path: Path to the template image
+        :param scale_range: Scaling search range
+        :param confidence: Minimum confidence threshold (0-1)
+        :param grayscale: Whether to convert to grayscale image
+        :return: Location dictionary or None if not found
+        """
+        # Capture screenshot and convert to numpy array
+        screenshot = pyautogui.screenshot()
+        screenshot_np = np.array(screenshot)
+        
+        # Convert to grayscale if requested (improves matching speed and accuracy)
+        if grayscale:
+            screenshot_np = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2GRAY)
+        
+        # Read template image
+        template = cv2.imread(template_path, 0 if grayscale else 1)
+        if template is None:
+            print(f"[X] Cannot read image: {template_path}")
+            return None
+        
+        # Initialize best match tracking variables
+        best_match = None
+        best_confidence = 0
+        best_scale = 1.0
+        best_position = None
+        
+        # First try common scaling ratios (optimize performance)
+        common_scales = [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0]
+        # Sort common scales in ascending order
+        common_scales.sort()
+        
+        # Match process tracking variables
+        found_common_match = False
+        confidence_trend = []  # Track confidence trend changes
+        fine_scales = []  # Initialize fine_scales for later use
+        
+        # Check common scaling ratios first
+        print(f"Trying common scaling ratios...")
+        for scale in common_scales:
+            if scale < scale_range[0] or scale > scale_range[1]:
+                continue
+                
+            # Resize template based on scale
+            resized_template = cv2.resize(
+                template, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR
+            )
+            
+            # Skip if template is larger than screenshot
+            if (resized_template.shape[0] > screenshot_np.shape[0] or 
+                resized_template.shape[1] > screenshot_np.shape[1]):
+                continue
+            
+            # Perform template matching
+            result = cv2.matchTemplate(
+                screenshot_np, resized_template, cv2.TM_CCOEFF_NORMED
+            )
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            
+            # Record confidence trend
+            confidence_trend.append(max_val)
+            
+            # If above confidence threshold, return immediately
+            if max_val >= confidence:
+                h, w = resized_template.shape[:2]
+                print(f"Match found at common ratio {scale:.2f} with confidence {max_val:.3f}")
+                found_common_match = True
+                center_x = max_loc[0] + w // 2
+                center_y = max_loc[1] + h // 2
+                print(f"Point =({center_x},{center_y})")
+                return {
+                    "left": max_loc[0],
+                    "top": max_loc[1],
+                    "width": w,
+                    "height": h,
+                }
+                
+            # Update best match if better
+            if max_val > best_confidence:
+                best_confidence = max_val
+                best_position = max_loc
+                best_match = resized_template
+                best_scale = scale
+        
+        # If no match found, try to optimize search range based on confidence trend
+        if best_confidence > 0:
+            # Find the scale index with highest confidence
+            if confidence_trend:
+                peak_idx = confidence_trend.index(max(confidence_trend))
+                peak_scale = common_scales[peak_idx]
+                
+                # Narrow search range around peak
+                min_scale = max(scale_range[0], peak_scale * 0.6)
+                max_scale = min(scale_range[1], peak_scale * 1.4)
+                
+                # Search more precisely around peak
+                print(f"Searching for more precise ratio around peak {peak_scale:.2f} ({min_scale:.2f}-{max_scale:.2f})...")
+                
+                # Add more ratios around the peak
+                fine_scales = np.linspace(min_scale, max_scale, 20)
+                
+                for scale in fine_scales:
+                    # Avoid rechecking already tested scales
+                    if scale in common_scales:
+                        continue
+                        
+                    # Resize template based on scale
+                    resized_template = cv2.resize(
+                        template, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR
+                    )
+                    
+                    # Skip if template is larger than screenshot
+                    if (resized_template.shape[0] > screenshot_np.shape[0] or 
+                        resized_template.shape[1] > screenshot_np.shape[1]):
+                        continue
+                    
+                    # Perform template matching
+                    result = cv2.matchTemplate(
+                        screenshot_np, resized_template, cv2.TM_CCOEFF_NORMED
+                    )
+                    _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                    
+                    # If confidence above threshold, return immediately
+                    if max_val >= confidence:
+                        h, w = resized_template.shape[:2]
+                        print(f"Match found at precise ratio {scale:.2f} with confidence {max_val:.3f}")
+                        return {
+                            "left": max_loc[0],
+                            "top": max_loc[1],
+                            "width": w,
+                            "height": h,
+                        }
+                    
+                    # Update best match if better
+                    if max_val > best_confidence:
+                        best_confidence = max_val
+                        best_position = max_loc
+                        best_match = resized_template
+                        best_scale = scale
+        
+        # If no match found meeting threshold, but have close match, accept best match with lower threshold
+        # This is particularly useful for images in different scaling environments
+        # if best_confidence >= (confidence * 0.85):  # Allow match slightly below threshold
+        #     h, w = best_match.shape[:2]
+        #     print(f"Accepting second-best match, ratio {best_scale:.2f}, confidence {best_confidence:.3f} (threshold is {confidence})")
+        #     return {
+        #         "left": best_position[0],
+        #         "top": best_position[1],
+        #         "width": w,
+        #         "height": h,
+        #     }
+        
+        # If even best match isn't good enough, do full range search
+        if best_confidence < (confidence * 0.7):
+            print(f"Trying full range search...")
+            # Search with coarser step size over entire range
+            step = 0.1  # Larger step size for performance
+            for scale in np.arange(scale_range[0], scale_range[1], step):
+                # Avoid rechecking already tested scales
+                if scale in common_scales or any(abs(scale - fs) < 0.05 for fs in fine_scales):
+                    continue
+                    
+                # Resize template based on scale
+                resized_template = cv2.resize(
+                    template, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR
+                )
+                
+                # Skip if template is larger than screenshot
+                if (resized_template.shape[0] > screenshot_np.shape[0] or 
+                    resized_template.shape[1] > screenshot_np.shape[1]):
+                    continue
+                
+                # Perform template matching
+                result = cv2.matchTemplate(
+                    screenshot_np, resized_template, cv2.TM_CCOEFF_NORMED
+                )
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                
+                # If confidence above threshold, return immediately
+                if max_val >= confidence:
+                    h, w = resized_template.shape[:2]
+                    print(f"Match found in full range search, ratio {scale:.2f}, confidence {max_val:.3f}")
+                    return {
+                        "left": max_loc[0],
+                        "top": max_loc[1],
+                        "width": w,
+                        "height": h,
+                    }
+                    
+                # Update best match if better
+                if max_val > best_confidence:
+                    best_confidence = max_val
+                    best_position = max_loc
+                    best_match = resized_template
+                    best_scale = scale
+        
+        # Final check - return best match if good enough
+        if best_confidence >= confidence:
+            h, w = best_match.shape[:2]
+            print(f"Final match, ratio {best_scale:.2f}, confidence {best_confidence:.3f}")
+            return {
+                "left": best_position[0],
+                "top": best_position[1],
+                "width": w,
+                "height": h,
+            }
+        else:
+            print(f"[X] No match found meeting confidence threshold ({confidence}), best: {best_confidence:.3f}")
+            return None
     def execute_command_file(self, file_path, stop_on_error=True):
         """
         Execute the commands in the command file
@@ -952,12 +1225,15 @@ class AutoGUIController:
         log_buffer = io.StringIO()
 
         try:
-            # Write header to log
+            # Get screen size and scale factor
+            screen_width, screen_height = pyautogui.size()
+            scale_factor = self.detect_display_scale_factor()
+            # Write header to log with enhanced system information
             log_buffer.write(f"=== Falcon Command Execution Log ===\n")
             log_buffer.write(f"Script: {file_path}\n")
-            log_buffer.write(
-                f"Date/Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            )
+            log_buffer.write(f"Date/Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            log_buffer.write(f"Screen Resolution: {screen_width}x{screen_height}\n")
+            log_buffer.write(f"Display Scale Factor: {scale_factor:.2f} ({int(scale_factor*100)}%)\n")
             log_buffer.write(f"Stop on Error: {stop_on_error}\n\n")
             log_buffer.write("=== Command Execution ===\n\n")
 
@@ -1030,8 +1306,9 @@ class AutoGUIController:
                             # Handling quotes - 保持引號
                             if char == '"':
                                 in_quotes = not in_quotes
-                                current_part += char  # 把引號加入 current_part
+                                # Don't add quotes to the current_part
                                 i += 1
+                                continue
                                 continue
                             # Handling space
                             if char == " " and not in_quotes:
@@ -1236,6 +1513,8 @@ class AutoGUIController:
             import os
             import subprocess
             import sys
+            if isinstance(exe_path, list):
+                exe_path = " ".join(exe_path)  # 將列表合併為路徑字符串
             exe_path = exe_path.strip('"\'')
             if not os.path.exists(exe_path):
                 print(f"[Error] Application not found at '{exe_path}'")
@@ -1285,47 +1564,44 @@ class AutoGUIController:
         except Exception as e:
             print(f"Error launching application: {str(e)}")
             return 1
-    def wait_until_installed(self, software_name, timeout=120, interval=3):
+
+    def wait_until_installed(self, software_name, timeout=120, interval=3, fuzzy=True):
         """
         Wait until specified software is installed on the system
         
-        :param software_name: Name of the software to check for installation
-        :param timeout: Maximum time to wait in seconds
-        :param interval: Check interval in seconds
-        :return: True if software is installed within timeout, False if timed out
+        :param software_name: Name (or partial name) of the software to detect
+        :param timeout: Max wait time in seconds
+        :param interval: Time to wait between checks (in seconds)
+        :param fuzzy: Whether to use fuzzy/substring match (default True)
+        :return: True if installed within timeout, False otherwise
         """
         print(f"Waiting for software '{software_name}' to be installed... (timeout: {timeout}s)")
-        log_message = f"Waiting for software '{software_name}' to be installed... (timeout: {timeout}s)"
-        
         start_time = time.time()
         last_status_time = 0
-        
+
         while time.time() - start_time < timeout:
-            # Check if software is installed
-            if self.check_software(software_name):
-                elapsed = time.time() - start_time
-                success_msg = f"[V] Software '{software_name}' is now installed! (detected after {elapsed:.1f}s)"
-                print(success_msg)
-                return True
-                
-            # Show periodic status updates, but not too frequently
+            try:
+                if self.check_software(software_name, fuzzy=fuzzy):
+                    elapsed = time.time() - start_time
+                    print(f"[V] Software '{software_name}' is now installed! (detected after {elapsed:.1f}s)")
+                    return True
+            except Exception as e:
+                print(f"[!] Error during installation check: {e}")
+
             current_time = time.time()
             elapsed = current_time - start_time
             remaining = timeout - elapsed
-            
-            # Display status message every 10 seconds
+
             if current_time - last_status_time >= 10:
-                status_msg = f"...Still waiting for '{software_name}' to be installed... ({int(remaining)}s remaining)"
-                print(status_msg)
+                print(f"...Still waiting for '{software_name}' to be installed... ({int(remaining)}s remaining)")
                 last_status_time = current_time
-                
-            # Wait before next check
+
             time.sleep(interval)
-        
-        # If we get here, we timed out
-        timeout_msg = f"[✗] Timeout: Software '{software_name}' was not installed within {timeout}s"
-        print(timeout_msg)
+
+        print(f"[X] Timeout: Software '{software_name}' was not installed within {timeout}s")
         return False
+
+
     def run(self, args=None):
 
         log_buffer = io.StringIO()
@@ -1467,11 +1743,15 @@ class AutoGUIController:
                     text = args.type
                     # For direct typing fallback if needed
                     # pyautogui.write(text, interval=0.05)
-                    
+                    if text.startswith('"') and text.endswith('"'):
+                        text = text[1:-1]
+                    text = text.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r')                    
                     # Preferred clipboard method for Chinese characters
                     pyperclip.copy(text)
                     pyautogui.hotkey("ctrl", "v")
-                    msg = f"Typed :{text}"
+                    
+                    log_text = text.replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r')
+                    msg = f"Typed: {log_text}"
                     print(msg)
                     log_buffer.write(msg + "\n")
                 except Exception as e:
@@ -1648,12 +1928,13 @@ class AutoGUIController:
 
             if args.search_image:
                 try:
-                    click_img_msg = f"Attempting to find image: {args.search_image}"
+                    image_path = args.search_image.strip('"\'')
+                    click_img_msg = f"Attempting to find image: {image_path}"
                     print(click_img_msg)
                     log_buffer.write(click_img_msg + "\n")
 
                     result = self.locate_image(
-                        args.search_image, timeout=timeout_sec, show_location=False
+                        image_path, timeout=timeout_sec, show_location=False
                     )
                     if result:
                         center_x, center_y = result
@@ -1674,14 +1955,15 @@ class AutoGUIController:
 
             if args.click_image:
                 try:
+                    image_path = args.click_image.strip('"\'')
                     click_img_msg = (
-                        f"Attempting to find and click image: {args.click_image}"
+                        f"Attempting to find and click image: {image_path}"
                     )
                     print(click_img_msg)
                     log_buffer.write(click_img_msg + "\n")
 
                     result = self.locate_and_click_image(
-                        args.click_image, timeout=timeout_sec, show_location=False
+                        image_path, timeout=timeout_sec, show_location=False
                     )
                     if result:
                         center_x, center_y = result
@@ -1700,12 +1982,13 @@ class AutoGUIController:
 
             if args.right_click_image:
                 try:
-                    click_img_msg = f"Attempting to find and right click image: {args.right_click_image}"
+                    image_path = args.right_click_image.strip('"\'')
+                    click_img_msg = f"Attempting to find and right click image: {image_path}"
                     print(click_img_msg)
                     log_buffer.write(click_img_msg + "\n")
 
                     result = self.locate_and_right_click_image(
-                        args.right_click_image, timeout=timeout_sec, show_location=False
+                        image_path, timeout=timeout_sec, show_location=False
                     )
                     if result:
                         center_x, center_y = result
@@ -1724,12 +2007,13 @@ class AutoGUIController:
 
             if args.double_click_image:
                 try:
-                    dbl_click_img_msg = f"Attempting to find and double-click image: {args.double_click_image}"
+                    image_path = args.double_click_image.strip('"\'')
+                    dbl_click_img_msg = f"Attempting to find and double-click image: {image_path}"
                     print(dbl_click_img_msg)
                     log_buffer.write(dbl_click_img_msg + "\n")
 
                     result = self.locate_and_double_click_image(
-                        args.double_click_image,
+                        image_path,
                         timeout=timeout_sec,
                         show_location=False,
                     )
@@ -1750,31 +2034,50 @@ class AutoGUIController:
 
             if args.image_exists:
                 try:
-                    img_exists_msg = (
-                        f"Checking if image exists on screen: {args.image_exists}"
-                    )
+                    image_path = args.image_exists.strip('"\'')
+                    img_exists_msg = f"Checking if image exists on screen: {image_path}"
                     print(img_exists_msg)
                     log_buffer.write(img_exists_msg + "\n")
 
-                    location = pyautogui.locateOnScreen(
-                        args.image_exists, confidence=0.8, grayscale=True
-                    )
-                    if location:
-                        found_msg = f"Image found at location: ({location.left}, {location.top})"
-                        print(found_msg)
-                        log_buffer.write(found_msg + "\n")
-                        return 0
-                    else:
-                        not_found_msg = "Image not found on screen"
-                        print(not_found_msg)
-                        log_buffer.write(not_found_msg + "\n")
+                    # Check if the image file exists first
+                    if not Path(image_path).exists():
+                        file_error_msg = f"[Error] Image file not found: {image_path}"
+                        print(file_error_msg)
+                        log_buffer.write(file_error_msg + "\n")
                         return 1
+
+                    # Use the same function that --search-image uses
+                    try:
+                        # Use the new locate_image_multi_scale_auto function
+                        location = self.locate_image_multi_scale_auto(
+                            image_path, 
+                            confidence=0.9,
+                            grayscale=True
+                        )
+                        
+                        if location:
+                            center_x = location["left"] + location["width"] // 2
+                            center_y = location["top"] + location["height"] // 2
+                            found_msg = f"Image found at location: ({location['left']}, {location['top']}), center: ({center_x}, {center_y})"
+                            print(found_msg)
+                            log_buffer.write(found_msg + "\n")
+                            return 0
+                        else:
+                            not_found_msg = "Image not found on screen"
+                            print(not_found_msg)
+                            log_buffer.write(not_found_msg + "\n")
+                            return 1
+                    except Exception as e:
+                        detailed_error_msg = f"[Error] Error during image search: {str(e)}"
+                        print(detailed_error_msg)
+                        log_buffer.write(detailed_error_msg + "\n")
+                        return 1
+                        
                 except Exception as e:
-                    error_msg = f"Error checking for image: {str(e)}"
+                    error_msg = f"[Error] Error checking for image: {str(e)}"
                     print(error_msg)
                     log_buffer.write(error_msg + "\n")
                     return 1
-
             if args.command_file:
                 try:
                     cmd_file_msg = f"[command from file] {args.command_file}"
@@ -1817,7 +2120,7 @@ class AutoGUIController:
                     return 1
             if args.check_software:
                 try:
-                    software_name = args.check_software
+                    software_name = args.check_software.strip('"\'')
                     msg = f"Checking if '{software_name}' is installed..."
                     print(msg)
                     log_buffer.write(msg + "\n")
@@ -1839,21 +2142,24 @@ class AutoGUIController:
                     print(error_msg)
                     log_buffer.write(error_msg + "\n")
                     return 1
+                
             if args.wait_until_exist:
+                target_path = args.wait_until_exist.strip('"\'')
                 effective_timeout = None
                 if hasattr(args, 'wait_time') and args.wait_time is not None:
                     effective_timeout = args.wait_time
                 else:
                     effective_timeout = args.timeout or 30
                 if not self.wait_until_exist(
-                    args.wait_until_exist,
+                    target_path,
                     timeout=args.timeout or 30,
-                    interval=args.check_interval or 1,
+                    interval= 1,
                 ):
-                    print(f"[X] Timeout: {args.wait_until_exist} not found")
+                    print(f"[X] Timeout: {target_path} not found")
                     return 1
 
             if args.wait_until_process:
+                process_name = args.wait_until_process.strip('"\'')
                 # Use wait_time if provided, otherwise fall back to timeout or the default
                 effective_timeout = None
                 if hasattr(args, 'wait_time') and args.wait_time is not None:
@@ -1862,18 +2168,19 @@ class AutoGUIController:
                     effective_timeout = args.timeout or 30
                     
                 if not self.wait_until_process(
-                    args.wait_until_process,
+                    process_name,
                     timeout=effective_timeout,
-                    interval=args.check_interval or 1,
+                    interval= 1,
                 ):
-                    print(f"[X] Timeout: Process '{args.wait_until_process}' not found")
+                    print(f"[X] Timeout: Process '{process_name}' not found")
                     return 1
+                
             if args.wait_until_installed:
-                software_name = args.wait_until_installed
+                software_name = args.wait_until_installed.strip('"\'')
                 
                 # Determine timeout and interval values
                 timeout = args.wait_time if args.wait_time is not None else (args.timeout or 120)
-                interval = args.check_interval or 3
+                interval = 3
                 
                 wait_msg = f"Waiting for software '{software_name}' to be installed..."
                 print(wait_msg)

@@ -20,7 +20,7 @@ if sys.platform == 'win32':
 class FalconUIScriptBuilder:
     def __init__(self, root):
         self.root = root
-        self.version = "1.0.3"
+        self.version = "1.0.34"
         self.root.title("FalconUI Script Builder")
         self.root.geometry("1200x700")
         self.root.minsize(900, 600)
@@ -616,17 +616,17 @@ class FalconUIScriptBuilder:
                 {
                     "name": "--wait-until-installed",
                     "description": "Wait until software is installed",
-                    "params": ["SOFTWARE_NAME", "--wait-time", "SECS", "--check-interval", "SECS"],
+                    "params": ["SOFTWARE_NAME", "--wait-time"],
                 },
                 {
                     "name": "--wait-until-process",
                     "description": "Wait until specific process is running",
-                    "params": ["PROCESS_NAME","--wait-time", "SECS", "--check-interval", "SECS"],
+                    "params": ["PROCESS_NAME","--wait-time"],
                 },
                 {
                     "name": "--wait-until-exist",
                     "description": "Wait until image/file/folder exists",
-                    "params": ["PATH","--wait-time", "SECS", "--check-interval", "SECS"],
+                    "params": ["PATH","--wait-time"],
                 },
             ],
             "Image Recognition": [
@@ -1767,13 +1767,42 @@ class FalconUIScriptBuilder:
         # Create a buffer to capture all output for logging
         output_buffer = io.StringIO()
 
-        # Write header to the buffer
+        # Get screen resolution and try to get scale factor from falconCommand
+        screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        
+        # Get scale factor if possible (simplified version for GUI app)
+        try:
+            import ctypes
+            scale_factor = 1.0
+            if sys.platform == 'win32':
+                # This is a simplified approach for the GUI application
+                try:
+                    # Get DPI awareness
+                    awareness = ctypes.c_int()
+                    ctypes.windll.shcore.GetProcessDpiAwareness(0, ctypes.byref(awareness))
+                    
+                    # Get DPI
+                    dpi = ctypes.c_uint(0)
+                    ctypes.windll.shcore.GetDpiForMonitor(0, 0, ctypes.byref(dpi), ctypes.byref(dpi))
+                    
+                    # Calculate scale factor (96 is the base DPI)
+                    scale_factor = dpi.value / 96.0
+                except:
+                    # Fallback method
+                    hdc = ctypes.windll.user32.GetDC(0)
+                    dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+                    ctypes.windll.user32.ReleaseDC(0, hdc)
+                    scale_factor = dpi / 96.0
+        except:
+            scale_factor = 1.0  # Default if we can't detect
+        
+        # Write header to the buffer with enhanced system information
         output_buffer.write(f"=== FalconUI Script Execution Log ===\n")
         output_buffer.write(f"Script: {script_path}\n")
         output_buffer.write(f"Date/Time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        output_buffer.write(
-            f"Stop on Error: {'Yes' if self.stop_on_error_var.get() else 'No'}\n"
-        )
+        output_buffer.write(f"Screen Resolution: {screen_width}x{screen_height}\n")
+        output_buffer.write(f"Display Scale Factor: {scale_factor:.2f} ({int(scale_factor*100)}%)\n")
+        output_buffer.write(f"Stop on Error: {'Yes' if self.stop_on_error_var.get() else 'No'}\n")
         output_buffer.write("\n=== Execution Output ===\n\n")
 
         # Current command tracking
@@ -1807,7 +1836,7 @@ class FalconUIScriptBuilder:
                         command_output.append((output.strip(), self._determine_output_type(output)))
                     else:
                         # Regular line-by-line handling for non-grouped output
-                        if "[Error]" in output or "Failed:" in output or "Exception:" in output:
+                        if "Error" in output or "Failed" in output or "Exception" in output:
                             error_count += 1
                             error_lines.append(output.strip())
                             timestamp = time.strftime("%H:%M:%S")
@@ -1952,7 +1981,7 @@ class FalconUIScriptBuilder:
         line_str = line.strip()
         if "[command]" in line_str:
             return "command"
-        elif "[Error]" in line_str or "Failed:" in line_str or "Exception:" in line_str:
+        elif "Error" in line_str or "Failed" in line_str or "Exception" in line_str:
             return "error"
         elif "[Warning]" in line_str:
             return "warning"
